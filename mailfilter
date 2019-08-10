@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import re
+import email
+
+
+class Mailfilter:
+    def __init__(self, maildir):
+        self.maildir = maildir
+
+    def prepare_filter_dest(self, name):
+        for path in (os.path.join(self.maildir, name, 'tmp'),
+                     os.path.join(self.maildir, name, 'cur'),
+                     os.path.join(self.maildir, name, 'new')):
+            os.makedirs(path, exist_ok=True)
+
+    def build_filters(self):
+        filters = []
+
+        mfdir = os.path.join(os.getenv('HOME'), '.mailfilters')
+        for name in os.listdir(mfdir):
+            with open(os.path.join(mfdir, name)) as f:
+                filters.append((name, f.read().strip()))
+                self.prepare_filter_dest(name)
+
+        self.filters = filters
+
+    def move_mail(self, mail, dest):
+        m = re.match(r'{}/([\w-]+)/(cur|new)/(.+)'.format(self.maildir.rstrip('/')), mail)
+        # print(mail)
+        # print(dest)
+        # print(m.group(1))
+        # print(m.group(3))
+        if m.group(1) != dest:
+            destpath = os.path.join(self.maildir, dest, m.group(2), m.group(3))
+            os.rename(mail, destpath)
+        # print(dest)
+        # print(os.path.join(self.maildir, dest, m.group(2), m.group(3)))
+        # print('----')
+
+    def extract_headers(self, mail):
+        try:
+            with open(mail, 'rb') as f:
+                msg = email.message_from_binary_file(f)
+                parser = email.parser.BytesHeaderParser()
+                headers = parser.parsebytes(msg.as_bytes())
+                return list(headers.items())
+        except UnicodeDecodeError:
+            raise Exception(mail)
+            return []
+
+    def filter_mail(self, mail):
+        headers = self.extract_headers(mail)
+        # fixme: also body?
+
+        def h(name, val):
+            return (name, val) in headers
+
+        def re_h(name, header_re):
+            hval = get_header_value(name)
+            return re.search(header_re, hval)
+
+        def get_header_value(name):
+            for (hname, hval) in headers:
+                if hname == name:
+                    return str(hval)
+
+        def get_header_values(name):
+            val = get_header_value(name)
+            if val is not None:
+                return [s.strip() for s in val.split(',')]
+            else:
+                return []
+
+        def get_address(s):
+            m = re.search(r'<([^>]+)>', s)
+            if m is not None:
+                return m.group(1)
+            else:
+                return s
+
+        def get_addresses(name):
+            return [get_address(s) for s in get_header_values(name)]
+
+        def to(address):
+            return address in get_addresses('To')
+
+        def to_re(address_re):
+            return any(re.match(address_re, x) for x in get_addresses('To'))
+
+        def cc(address):
+            return address in get_addresses('Cc') or address in get_addresses('CC')
+
+        def to_or_cc(address):
+            return to(address) or cc(address)
+
+        def From(address):
+            return address in get_addresses('From')
+
+        def mlist_naive(address, label=None):
+            # if address == 'bestyrelsen@kantinen.org':
+            #     print(to_or_cc(address))
+            #     print(re_h('Subject', r'^\[{}\]'.format(label)))
+            #     print('[{}]'.format(label) in get_header_value('Subject'))
+            #     print(repr(get_header_value('Subject')))
+            #     print(headers)
+            return to_or_cc(address) and \
+                (label is None or '[{}]'.format(label) in get_header_value('Subject'))
+
+        def mlist(list_id):
+            header = get_header_value('List-Id')
+            return header and list_id in header
+
+        def github(name):
+            return to('{}@noreply.github.com'.format(name))
+
+        def github_re(name):
+            return to_re('{}@noreply.github.com'.format(name))
+
+        chosen_name = None
+        for name, fun in self.filters:
+            if eval(fun):
+                if chosen_name is None:
+                    chosen_name = name
+                else:
+                    print('mail {} matches both {} and {}; ignoring'.format(
+                        mail, chosen_name, name), file=sys.stderr)
+                    break
+        if chosen_name is None:
+            chosen_name = 'INBOX'
+        self.move_mail(mail, chosen_name)
+
+    def run_all(self, new_only=False):
+        self.build_filters()
+
+        filenames_all = []
+        for dirpath, dirnames, filenames in os.walk(self.maildir):
+            if not filenames or dirpath == self.maildir:
+                continue
+            # fixme hardcoded
+            parts = dirpath.split('/')
+            if (len(parts) > 1 and parts[-2] in ['Sent', 'Drafts', 'Queue', 'Trash', 'Spam']) \
+               or (new_only and len(parts) > 0 and parts[-1] != 'new'):
+                continue
+            for filename in filenames:
+                filenames_all.append(os.path.join(dirpath, filename))
+
+        for filename, i in zip(filenames_all, range(len(filenames_all))):
+            if i % 100 == 0:
+                print('{}/{}'.format(i, len(filenames_all) - 1))
+            self.filter_mail(filename)
+
+    def get_lock(self):
+        self.lock_path = self.maildir + '.lock'
+        if os.path.exists(self.lock_path):
+            raise Exception
+        with open(self.lock_path, 'w') as f:
+            f.write('')
+
+    def release_lock(self):
+        os.remove(self.lock_path)
+
+if __name__ == '__main__':
+    try:
+        maildir = sys.argv[1]
+    except IndexError:
+        maildir = '.'
+
+    new_only = len(sys.argv) > 2 and sys.argv[2] == '--new-only'
+
+    mf = Mailfilter(maildir)
+    mf.get_lock()
+    mf.run_all(new_only=new_only)
+    mf.release_lock()

@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -e
+
+tmux list-sessions | grep -q offlineimap && exit 1
+tmux list-sessions | grep -q mailfilter && exit 1
+
+tmux new-session -d -s offlineimap offlineimap
+tmux new-session -d -s mailfilter mailfilter-inotify

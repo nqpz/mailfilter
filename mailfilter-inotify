@@ -1,0 +1,16 @@
+#!/bin/sh
+
+inotifywait -mr --timefmt '%d/%m/%y %H:%M' --format '%T %w %f' \
+-e close_write $HOME/.mail/metanohi/INBOX/tmp | while read date time dir file; do
+       FILECHANGE=${dir}${file}
+       echo "${date} ${time}: $FILECHANGE"
+
+       # Probably not needed.
+       while true; do
+           if ! [ "$(ls $HOME/.mail/metanohi/INBOX/tmp)" ]; then
+               break
+           fi
+       done
+
+       $(dirname "$0")/mailfilter $HOME/.mail/metanohi --new-only
+done

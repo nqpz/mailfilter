@@ -1,0 +1,36 @@
+#!/bin/sh
+
+bdir="$1"
+if ! [ "$bdir" ]; then
+    bdir="."
+fi
+
+oldfilters="$(dirname "$0")/oldfilters"
+others="$(dirname "$0")/others"
+
+dirs=''
+for dir in $(ls $bdir); do
+    b=$(basename $dir)
+    if (echo Queue; echo Trash; echo Drafts; echo Sent; echo Spam; echo Archive; cat $oldfilters) | grep -qw $b; then
+        continue
+    fi
+    if echo "$b" | grep -qE '^test'; then
+	continue
+    fi
+    dirs="$dirs $(readlink -f $bdir/$dir)"
+done
+
+dirs="$dirs /home/niels/-----OTHER-----"
+for other in $(cat $others); do
+    dirs="$dirs /home/niels/.mail/other/$other"
+done
+
+dirs="$dirs /home/niels/------OLD------"
+for dir in $(ls $bdir); do
+    b=$(basename $dir)
+    if cat $oldfilters | grep -qw $b; then
+	dirs="$dirs $(readlink -f $bdir/$dir)"    
+    fi
+done
+
+echo mailboxes $dirs
